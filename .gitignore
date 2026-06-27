@@ -1,0 +1,66 @@
+# ====================
+# Rust
+# ====================
+
+# Directorios de compilación
+target/
+
+# Archivos de debug
+**/*.rs.bk
+**/*.pdb
+
+# ====================
+# IDE / Editores
+# ====================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (CLion, IntelliJ, etc.)
+.idea/
+*.iml
+
+# Emacs / flycheck
+*flycheck*
+\#*\#
+.\#*
+*.elc
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+.vim/
+Session.vim
+
+# Helix
+.helix/
+
+# ====================
+# Sistema Operativo
+# ====================
+
+# Linux
+.directory
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ====================
+# Miscelánea
+# ====================
+
+# Archivos de entorno
+.env
+.env.local
+
+# Logs
+*.log
