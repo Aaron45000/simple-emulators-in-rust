@@ -5,9 +5,8 @@ use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowBuilder;
-
-use crate::memory::RawMemory;
 mod memory;
+mod cpu;
 
 
 struct Joypad 
@@ -42,7 +41,7 @@ impl Joypad
 
 struct Emulator
 {
-    raw_memory: RawMemory,
+    cpu: cpu::Cpu,
     joypad: Joypad,
 }
 
@@ -52,7 +51,7 @@ impl Emulator
     {
         return Emulator
         {
-            raw_memory: memory::RawMemory::new(),
+            cpu: cpu::Cpu::new(),
             joypad: Joypad::new(),
         }
     }
@@ -62,19 +61,19 @@ impl Emulator
         let joypad_register;
 
     
-        self.raw_memory.address_bus[0xFF00] = (self.raw_memory.address_bus[0xFF00] & 0xF0) | 0x0F;
+        self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | 0x0F;
 
-        if ((self.raw_memory.address_bus[0xFF00] >> 5) & 1) == 0
+        if ((self.cpu.raw_memory.address_bus[0xFF00] >> 5) & 1) == 0
         {
-            if ((self.raw_memory.address_bus[0xFF00] >> 4) & 1) == 0
+            if ((self.cpu.raw_memory.address_bus[0xFF00] >> 4) & 1) == 0
             {
-                // Ambos selectores activos: combinar accion + dpad (caso raro)
+                
                 joypad_register = ((self.joypad.a && self.joypad.right) as u8)
                                 | ((self.joypad.b && self.joypad.left) as u8) << 1
                                 | ((self.joypad.select && self.joypad.up) as u8) << 2
                                 | ((self.joypad.start && self.joypad.down) as u8) << 3;
 
-                self.raw_memory.address_bus[0xFF00] = (self.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
+                self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
                 return;
             }
 
@@ -84,11 +83,11 @@ impl Emulator
                             | (self.joypad.select as u8) << 2
                             | (self.joypad.start as u8) << 3;
 
-            self.raw_memory.address_bus[0xFF00] = (self.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
+            self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
             return;
         }
 
-        if !((self.raw_memory.address_bus[0xFF00] & 1<<4) == 1<<4)
+        if !((self.cpu.raw_memory.address_bus[0xFF00] & 1<<4) == 1<<4)
         {
             // Bit 5 = 1, Bit 4 = 0: leer direcciones (Right, Left, Up, Down)
             joypad_register = (self.joypad.right as u8)
@@ -96,11 +95,13 @@ impl Emulator
                             | (self.joypad.up as u8) << 2
                             | (self.joypad.down as u8) << 3;
 
-            self.raw_memory.address_bus[0xFF00] = (self.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
+            self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
             return;
         }
     }
 }
+
+
 
 
 fn main() 
@@ -137,7 +138,7 @@ fn main()
     let mut emulator = Emulator::new();
 
     
-    emulator.raw_memory.address_bus[0xFF00] |= 0b11001111;
+    emulator.cpu.raw_memory.address_bus[0xFF00] |= 0b11001111;
 
     // --- Crear ventana con winit 0.29 ---
     let event_loop = EventLoop::new().unwrap();
@@ -215,14 +216,18 @@ fn main()
 
                 if now >= next_frame
                 {
-                    let ant_joypad_register = emulator.raw_memory.address_bus[0xFF00];
+                    
+                    let ant_joypad_register = emulator.cpu.raw_memory.address_bus[0xFF00];
 
                     emulator.read_joypad();
 
-                    if ant_joypad_register != emulator.raw_memory.address_bus[0xFF00]
+                    if ant_joypad_register != emulator.cpu.raw_memory.address_bus[0xFF00]
                     {
-                        println!("joypad_register: {:08b}", emulator.raw_memory.address_bus[0xFF00]);
+                        
+                        println!("joypad_register: {:08b}", emulator.cpu.raw_memory.address_bus[0xFF00]);
+                        
                     }
+                     
 
                     // Aqui ira la logica de CPU: emulator.cpu.step(), emulator.ppu.step(), etc.
 
