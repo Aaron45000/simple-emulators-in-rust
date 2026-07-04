@@ -2,7 +2,6 @@ pub struct RawMemory
 {
 
     pub address_bus: [u8; 0x10000],
-    pub program_counter: u16,
 
 }
 
@@ -16,20 +15,10 @@ impl RawMemory
         {
 
             address_bus: [0; 0x10000],
-            program_counter: 0 as u16,
+
         }
     }
-    pub fn read(&mut self, address: usize) -> u8
-    {
-
-        return self.address_bus[address];
-    }
-    pub fn write(&mut self, address: usize, value: u8) -> bool
-    {
-
-        self.address_bus[address] = value;
-        return true
-    }
+    
 }
 
 

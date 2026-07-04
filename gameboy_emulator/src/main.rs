@@ -227,9 +227,28 @@ fn main()
                         println!("joypad_register: {:08b}", emulator.cpu.raw_memory.address_bus[0xFF00]);
                         
                     }
+
+                    let mut ticks_frame = 17556 as u16;
+                    while ticks_frame > 0
+                    {
+                        //interrupciones
+
+                        let ticks_gastados = emulator.cpu.step(); // falta el let ticks_gastados = emulator.cpu.step()
+
+                        // emulator.ppu.step(ticks_gastados);
+                        // emulator.timer.step(ticks_gastados);
+                        // emulator.apu.step(ticks_gastados);
+                        
+                        emulator.read_joypad();
+                        ticks_frame -= ticks_gastados as u16;
+
+                    }
                      
 
                     // Aqui ira la logica de CPU: emulator.cpu.step(), emulator.ppu.step(), etc.
+
+
+                    
 
                     window.request_redraw();
 
