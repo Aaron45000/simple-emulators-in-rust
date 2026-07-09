@@ -6,6 +6,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowBuilder;
 mod memory;
+mod timer;
 mod cpu;
 
 
@@ -43,6 +44,7 @@ struct Emulator
 {
     cpu: cpu::Cpu,
     joypad: Joypad,
+    timer: timer::Timer,
 }
 
 impl Emulator
@@ -53,50 +55,64 @@ impl Emulator
         {
             cpu: cpu::Cpu::new(),
             joypad: Joypad::new(),
+            timer: timer::Timer::new(),
         }
     }
 
     fn read_joypad(&mut self)
     {
-        let joypad_register;
+        let joypad_register: u8;
+        
+        // Leemos el estado anterior para detectar si algún botón acaba de ser presionado
+        let old_state = self.cpu.raw_memory.read_byte(0xFF00);
+        
+        let p14 = (old_state >> 4) & 1; // Bit 4: 0 = Selecciona Direcciones
+        let p15 = (old_state >> 5) & 1; // Bit 5: 0 = Selecciona Botones de acción
 
-    
-        self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | 0x0F;
-
-        if ((self.cpu.raw_memory.address_bus[0xFF00] >> 5) & 1) == 0
+        if p15 == 0
         {
-            if ((self.cpu.raw_memory.address_bus[0xFF00] >> 4) & 1) == 0
+            if p14 == 0
             {
-                
+                // Ambos seleccionados (raro pero posible)
                 joypad_register = ((self.joypad.a && self.joypad.right) as u8)
                                 | ((self.joypad.b && self.joypad.left) as u8) << 1
                                 | ((self.joypad.select && self.joypad.up) as u8) << 2
                                 | ((self.joypad.start && self.joypad.down) as u8) << 3;
-
-                self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
-                return;
             }
-
-            // Bit 5 = 0, Bit 4 = 1: leer botones de accion (A, B, Select, Start)
-            joypad_register = (self.joypad.a as u8)
-                            | (self.joypad.b as u8) << 1
-                            | (self.joypad.select as u8) << 2
-                            | (self.joypad.start as u8) << 3;
-
-            self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
-            return;
+            else 
+            {
+                // Bit 5 = 0, Bit 4 = 1: leer botones de accion (A, B, Select, Start)
+                joypad_register = (self.joypad.a as u8)
+                                | (self.joypad.b as u8) << 1
+                                | (self.joypad.select as u8) << 2
+                                | (self.joypad.start as u8) << 3;
+            }
         }
-
-        if !((self.cpu.raw_memory.address_bus[0xFF00] & 1<<4) == 1<<4)
+        else if p14 == 0
         {
             // Bit 5 = 1, Bit 4 = 0: leer direcciones (Right, Left, Up, Down)
             joypad_register = (self.joypad.right as u8)
                             | (self.joypad.left as u8) << 1
                             | (self.joypad.up as u8) << 2
                             | (self.joypad.down as u8) << 3;
+        }
+        else 
+        {
+            // Ninguno seleccionado
+            joypad_register = 0x0F;
+        }
 
-            self.cpu.raw_memory.address_bus[0xFF00] = (self.cpu.raw_memory.address_bus[0xFF00] & 0xF0) | joypad_register;
-            return;
+        let new_state = (old_state & 0xF0) | joypad_register;
+        
+        // Escribimos el nuevo estado usando la función segura
+        self.cpu.raw_memory.write_byte(0xFF00, new_state);
+
+        // Si algún botón pasó de 1 a 0 (de soltado a presionado), disparamos la interrupción
+        if (old_state & !new_state & 0x0F) != 0 
+        {
+            let current_if = self.cpu.raw_memory.read_byte(0xFF0F);
+            // Encender bit 4 del registro IF (Interrupción de Joypad)
+            self.cpu.raw_memory.write_byte(0xFF0F, current_if | 0b0001_0000); 
         }
     }
 }
@@ -140,7 +156,6 @@ fn main()
     
     emulator.cpu.raw_memory.address_bus[0xFF00] |= 0b11001111;
 
-    // --- Crear ventana con winit 0.29 ---
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new()
         .with_title("prueba inputs")
@@ -148,8 +163,6 @@ fn main()
         .build(&event_loop)
         .unwrap();
 
-    // --- Inicializar pixels ---
-    // Resolución interna de Game Boy: 160x144
     let window_size = window.inner_size();
     let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
     let mut pixels = Pixels::new(160, 144, surface_texture).unwrap();
@@ -229,14 +242,25 @@ fn main()
                     }
 
                     let mut ticks_frame = 17556 as u16;
+                    
                     while ticks_frame > 0
                     {
-                        //interrupciones
+                        
+                        let mut ticks_gastados = emulator.cpu.handle_interrupts() as u16; 
 
-                        let ticks_gastados = emulator.cpu.step(); // falta el let ticks_gastados = emulator.cpu.step()
+                        if ticks_gastados == 0
+                        {
+                            if !emulator.cpu.halted
+                            {
+
+                                ticks_gastados = emulator.cpu.step() as u16;
+                            
+                            }
+                            
+                        }
 
                         // emulator.ppu.step(ticks_gastados);
-                        // emulator.timer.step(ticks_gastados);
+                        emulator.timer.step(ticks_gastados as u8, &mut emulator.cpu.raw_memory);
                         // emulator.apu.step(ticks_gastados);
                         
                         emulator.read_joypad();

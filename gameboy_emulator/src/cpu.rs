@@ -1,13 +1,8 @@
-use crate::{cpu::{R8::{A, F}, R16::HL}, memory};
+use crate::{cpu::{R8::{A, F}, R16::HL}, memory, timer};
 
-// Registros de 16 bits (valor de bits_54 en opcodes: 0b00=BC, 0b01=DE, 0b10=HL, 0b11=SP)
-// SP es un campo separado en la struct; BC/DE/HL se acceden con get_r16/set_r16
 #[allow(dead_code)]
 enum R16 { BC = 0, DE = 1, HL = 2, SP = 3 }
 
-// Registros de 8 bits: índice directo en work_registers[u8; 8]
-// NOTA: en opcodes, bits_543 = 0b110 significa [HL] (acceso a memoria), no el registro F.
-//       F vive en el índice 6 del array pero nunca se accede como r8 en instrucciones.
 #[allow(dead_code)]
 enum R8 { B = 0, C = 1, D = 2, E = 3, H = 4, L = 5, F = 6, A = 7 }
 
@@ -16,8 +11,9 @@ pub struct Cpu
 {
     pub program_counter: usize,
     pub stack_pointer: u16,
-    pub ime: bool, // Interrupt Master Enable: habilita/deshabilita interrupciones
-
+    pub ime: bool, 
+    pub halted: bool,
+    pub halt_bug: bool,
     pub work_registers: [u8; 8],
     pub raw_memory: memory::RawMemory,
 }
@@ -31,20 +27,19 @@ impl Cpu
             program_counter: 0,
             stack_pointer: 0,
             ime: false,
+            halted: false,
+            halt_bug: false,
             work_registers: [0; 8],
             raw_memory: memory::RawMemory::new(),
         };
     }
 
-    // Obtiene el registro de 16 bits indicado por r16_idx (0=BC, 1=DE, 2=HL).
-    // El byte alto está en work_registers[r16_idx*2] y el bajo en [r16_idx*2 + 1].
     fn get_r16(&self, r16_idx: u8) -> u16
     {
         let i = (r16_idx * 2) as usize;
         (self.work_registers[i] as u16) << 8 | self.work_registers[i + 1] as u16
     }
 
-    // Escribe el registro de 16 bits indicado por r16_idx (0=BC, 1=DE, 2=HL).
     fn set_r16(&mut self, r16_idx: u8, val: u16)
     {
         let i = (r16_idx * 2) as usize;
@@ -52,15 +47,12 @@ impl Cpu
         self.work_registers[i + 1] = (val & 0xFF) as u8;
     }
 
-    // Obtiene el par AF como u16 (A = byte alto, F = byte bajo).
     fn get_af(&self) -> u16
     {
         (self.work_registers[R8::A as usize] as u16) << 8
             | self.work_registers[R8::F as usize] as u16
     }
 
-    // Escribe el par AF (A = byte alto, F = byte bajo).
-    // El nibble bajo de F es siempre 0 en el Game Boy.
     #[allow(dead_code)]
     fn set_af(&mut self, val: u16)
     {
@@ -68,14 +60,66 @@ impl Cpu
         self.work_registers[R8::F as usize] = (val & 0xF0) as u8; // nibble bajo de F siempre 0
     }
 
+    pub fn handle_interrupts(&mut self) -> u8
+    {
+        let requested = self.raw_memory.read_byte((0xFF0F) as u16);
+        let enabled = self.raw_memory.read_byte((0xFFFF) as u16);
+        let pending = requested & enabled;
+
+        if pending != 0
+        {
+            self.halted = false;
+        }
+
+        if !self.ime || pending == 0
+        {
+            return 0;
+        }
+
+        for i in 0..=4
+        {
+            if pending & (1 << i) != 0
+            {
+                self.ime = false;
+                self.raw_memory.write_byte((0xFF0F) as u16, self.raw_memory.read_byte((0xFF0F) as u16) & !(1 << i));
+
+                let hi = (self.program_counter >> 8) as u8;
+                let lo = (self.program_counter & 0xFF) as u8; 
+ 
+                self.stack_pointer = self.stack_pointer.wrapping_sub(1);
+                self.raw_memory.write_byte((self.stack_pointer as usize) as u16, hi);
+                self.stack_pointer = self.stack_pointer.wrapping_sub(1);
+                self.raw_memory.write_byte((self.stack_pointer as usize) as u16, lo);
+
+                self.program_counter = match i
+                {
+                    0 => 0x40, // V-Blank
+                    1 => 0x48, // LCD STAT
+                    2 => 0x50, // Timer
+                    3 => 0x58, // Serial
+                    4 => 0x60, // Joypad
+                    _ => unreachable!(),
+                };
+
+                return 20;
+            }
+        }
+        return 0;
+    }
+
     pub fn step(&mut self) -> u8 // devuelve la cantidad de ticks que usó esa instrucción
     {
-        let opcode   = self.raw_memory.address_bus[self.program_counter];
-        let bits_76  = (self.raw_memory.address_bus[self.program_counter] & 0xC0) >> 6; // 76
-        let bits_3210 = self.raw_memory.address_bus[self.program_counter] & 0b1111;     // 3210
-        let bits_54  = (self.raw_memory.address_bus[self.program_counter] & 0b110000) >> 4; // 54
-        let bits_543 = (self.raw_memory.address_bus[self.program_counter] & 0b111000) >> 3; // 543
-        let bits_210 = self.raw_memory.address_bus[self.program_counter] & 0b111;          // 210
+        if self.halt_bug {
+            self.program_counter = self.program_counter.wrapping_sub(1);
+            self.halt_bug = false;
+        }
+
+        let opcode   = self.raw_memory.read_byte((self.program_counter) as u16);
+        let bits_76  = (self.raw_memory.read_byte((self.program_counter) as u16) & 0xC0) >> 6; // 76
+        let bits_3210 = self.raw_memory.read_byte((self.program_counter) as u16) & 0b1111;     // 3210
+        let bits_54  = (self.raw_memory.read_byte((self.program_counter) as u16) & 0b110000) >> 4; // 54
+        let bits_543 = (self.raw_memory.read_byte((self.program_counter) as u16) & 0b111000) >> 3; // 543
+        let bits_210 = self.raw_memory.read_byte((self.program_counter) as u16) & 0b111;          // 210
 
         if opcode != 0xCB
         {
@@ -241,7 +285,7 @@ impl Cpu
                     if opcode == 0b01110110
                     {
                         // halt
-                        return 0;
+                        return self.halted();
                     }
 
                     // ld r8, r8
@@ -302,13 +346,12 @@ impl Cpu
                 {
                     match bits_3210
                     {
-                        // ---- ya implementado ----
+
                         0b0110 | 0b1110 =>
                         {
                             return self.alu_a_imm8(bits_543);
                         }
 
-                        // ---- PUSH / POP ----
                         0b0001 => 
                         { 
                             return self.pop_r16(bits_54);  
@@ -318,7 +361,6 @@ impl Cpu
                             return self.push_r16(bits_54); 
                         } // PUSH r16
 
-                        // ---- RET / RETI ----
                         0b0000 if bits_54 <= 0b01 =>
                         {
                             return self.ret_cond(bits_543); // RET NZ / RET NC
@@ -336,7 +378,7 @@ impl Cpu
                             return self.reti(); 
                         } // RETI
 
-                        // ---- CALL ----
+                        // calls
                         0b0100 if bits_54 <= 0b01 =>
                         {
                             return self.call_cond_imm16(bits_543); // CALL NZ/NC, imm16
@@ -350,7 +392,7 @@ impl Cpu
                             return self.call_imm16(); 
                         } // CALL imm16
 
-                        // ---- JP ----
+                        // jp
                         0b0010 if bits_54 <= 0b01 =>
                         {
                             return self.jp_cond_imm16(bits_543); // JP NZ/NC, imm16
@@ -368,10 +410,10 @@ impl Cpu
                             return self.jp_hl();    
                         } // JP HL
 
-                        // ---- RST ----
+                        // RST
                         0b0111 | 0b1111 => { return self.rst(bits_543); }
 
-                        // ---- Loads de alta pagina (0xFF00 + offset) ----
+                        // ldh
                         0b0000 if bits_54 == 0b10 => 
                         { 
                             return self.ld_highpage_n_a();  
@@ -443,7 +485,7 @@ impl Cpu
         }
         else
         {
-            let cb_opcode = self.raw_memory.address_bus[self.program_counter + 1];
+            let cb_opcode = self.raw_memory.read_byte((self.program_counter + 1) as u16);
             let cb_bits_76 = (cb_opcode & 0xC0) >> 6;
             let cb_bits_543 = (cb_opcode & 0b111000) >> 3;
             let cb_bits_210 = cb_opcode & 0b111;
@@ -458,14 +500,12 @@ impl Cpu
         }
     }
 
-    // --- CB Prefix Instructions ---
-
     fn cb_rotates_shifts(&mut self, bits_543: u8, bits_210: u8) -> u8 {
         if bits_210 == 0b110 {
             let addr = self.get_r16(R16::HL as u8) as usize;
-            let val = self.raw_memory.address_bus[addr];
+            let val = self.raw_memory.read_byte((addr) as u16);
             let new_val = self.perform_cb_rot_shift(bits_543, val);
-            self.raw_memory.address_bus[addr] = new_val;
+            self.raw_memory.write_byte((addr) as u16, new_val);
             self.program_counter = self.program_counter.wrapping_add(2);
             return 4;
         }
@@ -526,13 +566,12 @@ impl Cpu
     fn cb_bit(&mut self, bits_543: u8, bits_210: u8) -> u8 {
         let val = if bits_210 == 0b110 {
             let addr = self.get_r16(R16::HL as u8) as usize;
-            self.raw_memory.address_bus[addr]
+            self.raw_memory.read_byte((addr) as u16)
         } else {
             self.work_registers[bits_210 as usize]
         };
         
         let zero = (val & (1 << bits_543)) == 0;
-        // BIT sets Z, resets N, sets H. C is unchanged.
         self.set_flags(zero, false, true, false);
         self.clear_flags(!zero, true, false, false);
         
@@ -543,9 +582,9 @@ impl Cpu
     fn cb_res(&mut self, bits_543: u8, bits_210: u8) -> u8 {
         if bits_210 == 0b110 {
             let addr = self.get_r16(R16::HL as u8) as usize;
-            let mut val = self.raw_memory.address_bus[addr];
+            let mut val = self.raw_memory.read_byte((addr) as u16);
             val &= !(1 << bits_543);
-            self.raw_memory.address_bus[addr] = val;
+            self.raw_memory.write_byte((addr) as u16, val);
             self.program_counter = self.program_counter.wrapping_add(2);
             return 4;
         }
@@ -560,9 +599,9 @@ impl Cpu
     fn cb_set(&mut self, bits_543: u8, bits_210: u8) -> u8 {
         if bits_210 == 0b110 {
             let addr = self.get_r16(R16::HL as u8) as usize;
-            let mut val = self.raw_memory.address_bus[addr];
+            let mut val = self.raw_memory.read_byte((addr) as u16);
             val |= 1 << bits_543;
-            self.raw_memory.address_bus[addr] = val;
+            self.raw_memory.write_byte((addr) as u16, val);
             self.program_counter = self.program_counter.wrapping_add(2);
             return 4;
         }
@@ -574,8 +613,6 @@ impl Cpu
         return 2;
     }
 
-    // Comprueba la condicion de salto segun bits_543:
-    // 0b100=NZ, 0b101=Z, 0b110=NC, 0b111=C
     fn check_condition(&self, bits_543: u8) -> bool
     {
         let f = self.work_registers[R8::F as usize];
@@ -589,13 +626,11 @@ impl Cpu
         }
     }
 
-    // --- PUSH / POP ---
-
     fn push_r16(&mut self, bits_54: u8) -> u8
     {
         let val = if bits_54 == 0b11
         {
-            self.get_af() // AF usa orden especial: A alto, F bajo
+            self.get_af() 
         }
         else
         {
@@ -604,23 +639,23 @@ impl Cpu
         let hi = (val >> 8) as u8;
         let lo = (val & 0xFF) as u8;
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = hi;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, hi);
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = lo;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, lo);
         self.program_counter = self.program_counter.wrapping_add(1);
         return 4;
     }
 
     fn pop_r16(&mut self, bits_54: u8) -> u8
     {
-        let lo = self.raw_memory.address_bus[self.stack_pointer as usize] as u16;
+        let lo = self.raw_memory.read_byte((self.stack_pointer as usize) as u16) as u16;
         self.stack_pointer = self.stack_pointer.wrapping_add(1);
-        let hi = self.raw_memory.address_bus[self.stack_pointer as usize] as u16;
+        let hi = self.raw_memory.read_byte((self.stack_pointer as usize) as u16) as u16;
         self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let val = (hi << 8) | lo;
         if bits_54 == 0b11
         {
-            self.set_af(val); // nibble bajo de F queda en 0 por set_af
+            self.set_af(val); 
         }
         else
         {
@@ -634,15 +669,15 @@ impl Cpu
 
     fn call_imm16(&mut self) -> u8
     {
-        let lo  = self.raw_memory.address_bus[self.program_counter + 1] as u16;
-        let hi  = self.raw_memory.address_bus[self.program_counter + 2] as u16;
+        let lo  = self.raw_memory.read_byte((self.program_counter + 1) as u16) as u16;
+        let hi  = self.raw_memory.read_byte((self.program_counter + 2) as u16) as u16;
         let target = (hi << 8) | lo;
-        // La direccion de retorno es la instruccion siguiente al CALL (PC + 3)
+
         let return_addr = (self.program_counter.wrapping_add(3)) as u16;
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = (return_addr >> 8) as u8;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, (return_addr >> 8) as u8);
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = (return_addr & 0xFF) as u8;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, (return_addr & 0xFF) as u8);
         self.program_counter = target as usize;
         return 6;
     }
@@ -657,13 +692,12 @@ impl Cpu
         return 3;
     }
 
-    // --- RET / RETI ---
 
     fn ret(&mut self) -> u8
     {
-        let lo = self.raw_memory.address_bus[self.stack_pointer as usize] as usize;
+        let lo = self.raw_memory.read_byte((self.stack_pointer as usize) as u16) as usize;
         self.stack_pointer = self.stack_pointer.wrapping_add(1);
-        let hi = self.raw_memory.address_bus[self.stack_pointer as usize] as usize;
+        let hi = self.raw_memory.read_byte((self.stack_pointer as usize) as u16) as usize;
         self.stack_pointer = self.stack_pointer.wrapping_add(1);
         self.program_counter = (hi << 8) | lo;
         return 4;
@@ -679,18 +713,16 @@ impl Cpu
     {
         if self.check_condition(bits_543)
         {
-            return self.ret().saturating_add(1); // 5 ticks si salta
+            return self.ret().saturating_add(1); 
         }
         self.program_counter = self.program_counter.wrapping_add(1);
         return 2;
     }
 
-    // --- JP ---
-
     fn jp_imm16(&mut self) -> u8
     {
-        let lo = self.raw_memory.address_bus[self.program_counter + 1] as usize;
-        let hi = self.raw_memory.address_bus[self.program_counter + 2] as usize;
+        let lo = self.raw_memory.read_byte((self.program_counter + 1) as u16) as usize;
+        let hi = self.raw_memory.read_byte((self.program_counter + 2) as u16) as usize;
         self.program_counter = (hi << 8) | lo;
         return 4;
     }
@@ -711,36 +743,33 @@ impl Cpu
         return 1;
     }
 
-    // --- RST ---
 
     fn rst(&mut self, bits_543: u8) -> u8
     {
         let vector = (bits_543 as u16) * 8; // vectores: 0x00, 0x08, 0x10 ... 0x38
         let return_addr = (self.program_counter.wrapping_add(1)) as u16;
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = (return_addr >> 8) as u8;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, (return_addr >> 8) as u8);
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-        self.raw_memory.address_bus[self.stack_pointer as usize] = (return_addr & 0xFF) as u8;
+        self.raw_memory.write_byte((self.stack_pointer as usize) as u16, (return_addr & 0xFF) as u8);
         self.program_counter = vector as usize;
         return 4;
     }
 
-    // --- Loads de alta pagina (0xFF00 + offset) ---
-
     fn ld_highpage_n_a(&mut self) -> u8 // LD [FF00+n], A
     {
-        let n    = self.raw_memory.address_bus[self.program_counter + 1] as usize;
+        let n    = self.raw_memory.read_byte((self.program_counter + 1) as u16) as usize;
         let addr = 0xFF00 | n;
-        self.raw_memory.address_bus[addr] = self.work_registers[A as usize];
+        self.raw_memory.write_byte((addr) as u16, self.work_registers[A as usize]);
         self.program_counter = self.program_counter.wrapping_add(2);
         return 3;
     }
 
     fn ld_a_highpage_n(&mut self) -> u8 // LD A, [FF00+n]
     {
-        let n    = self.raw_memory.address_bus[self.program_counter + 1] as usize;
+        let n    = self.raw_memory.read_byte((self.program_counter + 1) as u16) as usize;
         let addr = 0xFF00 | n;
-        self.work_registers[A as usize] = self.raw_memory.address_bus[addr];
+        self.work_registers[A as usize] = self.raw_memory.read_byte((addr) as u16);
         self.program_counter = self.program_counter.wrapping_add(2);
         return 3;
     }
@@ -749,7 +778,7 @@ impl Cpu
     {
         let c    = self.work_registers[R8::C as usize] as usize;
         let addr = 0xFF00 | c;
-        self.raw_memory.address_bus[addr] = self.work_registers[A as usize];
+        self.raw_memory.write_byte((addr) as u16, self.work_registers[A as usize]);
         self.program_counter = self.program_counter.wrapping_add(1);
         return 2;
     }
@@ -758,29 +787,27 @@ impl Cpu
     {
         let c    = self.work_registers[R8::C as usize] as usize;
         let addr = 0xFF00 | c;
-        self.work_registers[A as usize] = self.raw_memory.address_bus[addr];
+        self.work_registers[A as usize] = self.raw_memory.read_byte((addr) as u16);
         self.program_counter = self.program_counter.wrapping_add(1);
         return 2;
     }
 
-    // --- Loads directos a/desde direccion de 16 bits ---
-
     fn ld_imm16_a(&mut self) -> u8 // LD [imm16], A
     {
-        let lo   = self.raw_memory.address_bus[self.program_counter + 1] as usize;
-        let hi   = self.raw_memory.address_bus[self.program_counter + 2] as usize;
+        let lo   = self.raw_memory.read_byte((self.program_counter + 1) as u16) as usize;
+        let hi   = self.raw_memory.read_byte((self.program_counter + 2) as u16) as usize;
         let addr = (hi << 8) | lo;
-        self.raw_memory.address_bus[addr] = self.work_registers[A as usize];
+        self.raw_memory.write_byte((addr) as u16, self.work_registers[A as usize]);
         self.program_counter = self.program_counter.wrapping_add(3);
         return 4;
     }
 
     fn ld_a_imm16(&mut self) -> u8 // LD A, [imm16]
     {
-        let lo   = self.raw_memory.address_bus[self.program_counter + 1] as usize;
-        let hi   = self.raw_memory.address_bus[self.program_counter + 2] as usize;
+        let lo   = self.raw_memory.read_byte((self.program_counter + 1) as u16) as usize;
+        let hi   = self.raw_memory.read_byte((self.program_counter + 2) as u16) as usize;
         let addr = (hi << 8) | lo;
-        self.work_registers[A as usize] = self.raw_memory.address_bus[addr];
+        self.work_registers[A as usize] = self.raw_memory.read_byte((addr) as u16);
         self.program_counter = self.program_counter.wrapping_add(3);
         return 4;
     }
@@ -789,7 +816,7 @@ impl Cpu
 
     fn add_sp_imm8(&mut self) -> u8 // ADD SP, imm8
     {
-        let imm  = self.raw_memory.address_bus[self.program_counter + 1] as i8;
+        let imm  = self.raw_memory.read_byte((self.program_counter + 1) as u16) as i8;
         let sp   = self.stack_pointer;
         let immu = imm as u16;
         // H y C se calculan sobre el byte bajo de SP
@@ -804,7 +831,7 @@ impl Cpu
 
     fn ld_hl_sp_imm8(&mut self) -> u8 // LD HL, SP+imm8
     {
-        let imm  = self.raw_memory.address_bus[self.program_counter + 1] as i8;
+        let imm  = self.raw_memory.read_byte((self.program_counter + 1) as u16) as i8;
         let sp   = self.stack_pointer;
         let immu = imm as u16;
         let halfcarry_flag = (sp & 0xF).wrapping_add(immu & 0xF) > 0xF;
@@ -828,7 +855,7 @@ impl Cpu
     {
         let hl = self.get_r16(R16::HL as u8);
 
-        // bits_54 == SP (0b11): usa el stack pointer; el resto usa work_registers
+        
         let rr:u16;
         if bits_54 == R16::SP as u8
         {
@@ -906,15 +933,14 @@ impl Cpu
             _ => { println!("todo mal"); return 158; }
         };
 
-        self.work_registers[R8::A as usize] = self.raw_memory.address_bus[addr as usize];
+        self.work_registers[R8::A as usize] = self.raw_memory.read_byte((addr as usize) as u16);
         self.program_counter = self.program_counter.wrapping_add(1);
         return 2;
     }
 
     fn ld_r16mem_a(&mut self, bits_54: u8) -> u8
     {
-        // Guarda A en la dirección de memoria indicada por r16mem.
-        // HL+ y HL- post-incrementan/decrementan HL tras calcular la dirección.
+
         let a    = self.work_registers[R8::A as usize];
         let addr = match bits_54
         {
@@ -935,15 +961,15 @@ impl Cpu
             _ => { println!("todo mal"); return 158; }
         };
 
-        self.raw_memory.address_bus[addr as usize] = a;
+        self.raw_memory.write_byte((addr as usize) as u16, a);
         self.program_counter = self.program_counter.wrapping_add(1);
         return 2;
     }
 
     fn ld_r16_imm16(&mut self, bits_54: u8) -> u8
     {
-        let lo  = self.raw_memory.address_bus[self.program_counter + 1] as u16;
-        let hi  = self.raw_memory.address_bus[self.program_counter + 2] as u16;
+        let lo  = self.raw_memory.read_byte((self.program_counter + 1) as u16) as u16;
+        let hi  = self.raw_memory.read_byte((self.program_counter + 2) as u16) as u16;
         let val = (hi << 8) | lo;
 
         if bits_54 == R16::SP as u8
@@ -962,12 +988,12 @@ impl Cpu
     fn ld_imm16_sp(&mut self) -> u8
     {
         // guarda sp en las direcciones imm16 y imm16 + 1
-        let lo   = self.raw_memory.address_bus[self.program_counter + 1] as u16;
-        let hi   = self.raw_memory.address_bus[self.program_counter + 2] as u16;
+        let lo   = self.raw_memory.read_byte((self.program_counter + 1) as u16) as u16;
+        let hi   = self.raw_memory.read_byte((self.program_counter + 2) as u16) as u16;
         let addr = (hi << 8) | lo;
 
-        self.raw_memory.address_bus[addr as usize]     = (self.stack_pointer & 0xFF) as u8;
-        self.raw_memory.address_bus[addr as usize + 1] = (self.stack_pointer >> 8) as u8;
+        self.raw_memory.write_byte((addr as usize) as u16, (self.stack_pointer & 0xFF) as u8);
+        self.raw_memory.write_byte((addr as usize + 1) as u16, (self.stack_pointer >> 8) as u8);
 
         self.program_counter = self.program_counter.wrapping_add(3);
         return 5;
@@ -978,9 +1004,9 @@ impl Cpu
         if bits_543 == 0b110 // inc [HL]: acceso a memoria en lugar de registro
         {
             let addr          = self.get_r16(R16::HL as u8) as usize;
-            let old           = self.raw_memory.address_bus[addr];
+            let old           = self.raw_memory.read_byte((addr) as u16);
             let result        = old.wrapping_add(1);
-            self.raw_memory.address_bus[addr] = result;
+            self.raw_memory.write_byte((addr) as u16, result);
 
             let halfcarry_flag = (old & 0xF) == 0xF;
             let zero_flag      = result == 0;
@@ -1012,9 +1038,9 @@ impl Cpu
         if bits_543 == 0b110 // dec [HL]: acceso a memoria en lugar de registro
         {
             let addr          = self.get_r16(R16::HL as u8) as usize;
-            let old           = self.raw_memory.address_bus[addr];
+            let old           = self.raw_memory.read_byte((addr) as u16);
             let result        = old.wrapping_sub(1);
-            self.raw_memory.address_bus[addr] = result;
+            self.raw_memory.write_byte((addr) as u16, result);
 
             let halfcarry_flag = (old & 0xF) == 0; // borrow del nibble bajo
             let zero_flag      = result == 0;
@@ -1048,18 +1074,18 @@ impl Cpu
         {
 
             let address = self.get_r16(R16::HL as u8) as usize;
-            self.raw_memory.address_bus[address] = self.raw_memory.address_bus[self.program_counter + 1];
+            self.raw_memory.write_byte((address) as u16, self.raw_memory.read_byte((self.program_counter + 1) as u16));
             return 3;
 
         }
-        self.work_registers[bits_543 as usize] = self.raw_memory.address_bus[self.program_counter + 1];
+        self.work_registers[bits_543 as usize] = self.raw_memory.read_byte((self.program_counter + 1) as u16);
         return 2;
     }
 
     fn jr_imm8(&mut self) -> u8
     {
-        // El offset es un valor con signo (i8): puede ser negativo para saltar hacia atras
-        let offset = self.raw_memory.address_bus[self.program_counter + 1] as i8;
+        
+        let offset = self.raw_memory.read_byte((self.program_counter + 1) as u16) as i8;
         self.program_counter = ((self.program_counter as i32) + 2 + (offset as i32)) as usize;
         return 3;
     }
@@ -1069,7 +1095,7 @@ impl Cpu
 
         match bits_543
         {
-            0b100 => // JR NZ: salta si el flag Z esta a 0
+            0b100 => 
             {
                 if self.work_registers[F as usize] & 0b10000000 == 0
                 {
@@ -1078,7 +1104,7 @@ impl Cpu
                 self.program_counter = self.program_counter.wrapping_add(2);
                 return 2;         
             }
-            0b101 => // JR Z: salta si el flag Z esta a 1
+            0b101 => 
             {
                 if self.work_registers[F as usize] & 0b10000000 != 0
                 {
@@ -1087,7 +1113,7 @@ impl Cpu
                 self.program_counter = self.program_counter.wrapping_add(2);
                 return 2;         
             }
-            0b110 => // JR NC: salta si el flag C esta a 0
+            0b110 => 
             {
                 if self.work_registers[F as usize] & 0b00010000 == 0
                 {
@@ -1096,7 +1122,7 @@ impl Cpu
                 self.program_counter = self.program_counter.wrapping_add(2);
                 return 2;
             }
-            0b111 => // JR C: salta si el flag C esta a 1
+            0b111 => 
             {
                 if self.work_registers[F as usize] & 0b00010000 != 0
                 {
@@ -1217,7 +1243,7 @@ impl Cpu
 
             let addr = self.get_r16(HL as u8);
 
-            self.raw_memory.address_bus[addr as usize] = self.work_registers[bits_210 as usize];
+            self.raw_memory.write_byte((addr as usize) as u16, self.work_registers[bits_210 as usize]);
             self.program_counter = self.program_counter.wrapping_add(1);
             return 2; 
         
@@ -1227,7 +1253,7 @@ impl Cpu
 
             let addr = self.get_r16(HL as u8);
 
-            self.work_registers[bits_543 as usize] = self.raw_memory.address_bus[addr as usize];
+            self.work_registers[bits_543 as usize] = self.raw_memory.read_byte((addr as usize) as u16);
             self.program_counter = self.program_counter.wrapping_add(1);
             return 2; 
         
@@ -1246,7 +1272,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             let halfcarry_flag = (a & 0xF) + (hl & 0xF) > 0xF;
@@ -1285,7 +1311,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             let old_carry_flag:u8;
@@ -1347,7 +1373,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             let halfcarry_flag = (a & 0xF) < (hl & 0xF);
@@ -1386,7 +1412,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             let old_carry_flag:u8;
@@ -1448,7 +1474,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             self.work_registers[A as usize] = a & hl;
@@ -1481,7 +1507,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             self.work_registers[A as usize] = a ^ hl;
@@ -1514,7 +1540,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             self.work_registers[A as usize] = a | hl;
@@ -1547,7 +1573,7 @@ impl Cpu
         if bits_210 == 0b110
         {
 
-            let hl = self.raw_memory.address_bus[self.get_r16(HL as u8) as usize];
+            let hl = self.raw_memory.read_byte((self.get_r16(HL as u8) as usize) as u16);
             let a = self.work_registers[A as usize];
 
             let halfcarry_flag = (a & 0xF) < (hl & 0xF);
@@ -1581,7 +1607,7 @@ impl Cpu
     }
     fn alu_a_imm8(&mut self, bits_543: u8) -> u8
     {
-        let imm8 = self.raw_memory.address_bus[self.program_counter + 1];
+        let imm8 = self.raw_memory.read_byte((self.program_counter + 1) as u16);
         let a    = self.work_registers[A as usize];
 
         match bits_543
@@ -1692,6 +1718,19 @@ impl Cpu
 
         self.set_flags(zero_flag, false, false, new_carry);
         self.clear_flags(!zero_flag, false, true, !new_carry);
+
+        self.program_counter = self.program_counter.wrapping_add(1);
+        return 1;
+    }
+
+    fn halted(&mut self) -> u8
+    {
+        let pending = self.raw_memory.read_byte((0xFF0F) as u16) & self.raw_memory.read_byte((0xFFFF) as u16);
+        if !self.ime && pending != 0 {
+            self.halt_bug = true;
+        } else {
+            self.halted = true;
+        }
 
         self.program_counter = self.program_counter.wrapping_add(1);
         return 1;
