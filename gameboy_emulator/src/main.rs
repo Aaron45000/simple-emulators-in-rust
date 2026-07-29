@@ -8,6 +8,7 @@ use winit::window::WindowBuilder;
 mod memory;
 mod timer;
 mod cpu;
+mod ppu;
 
 
 struct Joypad 
@@ -45,6 +46,7 @@ struct Emulator
     cpu: cpu::Cpu,
     joypad: Joypad,
     timer: timer::Timer,
+    ppu: ppu::Ppu
 }
 
 impl Emulator
@@ -56,6 +58,7 @@ impl Emulator
             cpu: cpu::Cpu::new(),
             joypad: Joypad::new(),
             timer: timer::Timer::new(),
+            ppu: ppu::Ppu::new()
         }
     }
 
