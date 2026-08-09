@@ -59,13 +59,13 @@ impl Ppu {
             }
         }
 
-        // --- TRANSICIONES DE MODO ---
+        
         if current_mode != old_mode 
         {
             
             if current_mode == PpuMode::HBlank as u8 
             {
-                // self.render_scanline(ly, memory);
+                // renderiza linea
             }
             
         }

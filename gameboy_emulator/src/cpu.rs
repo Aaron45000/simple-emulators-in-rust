@@ -1,4 +1,4 @@
-use crate::{cpu::{R8::{A, F}, R16::HL}, memory, timer};
+use crate::{cpu::{R8::{A, F}, R16::HL}, memory};
 
 #[allow(dead_code)]
 enum R16 { BC = 0, DE = 1, HL = 2, SP = 3 }
@@ -1702,12 +1702,12 @@ impl Cpu
         let mut a  = self.work_registers[R8::A as usize];
         let mut new_carry = false;
 
-        if !n_flag // la operacion anterior fue una suma
+        if !n_flag 
         {
             if c_flag || a > 0x99        { a = a.wrapping_add(0x60); new_carry = true; }
             if h_flag || (a & 0x0F) > 9  { a = a.wrapping_add(0x06); }
         }
-        else // la operacion anterior fue una resta
+        else 
         {
             if c_flag { a = a.wrapping_sub(0x60); new_carry = true; }
             if h_flag { a = a.wrapping_sub(0x06); }

@@ -69,6 +69,9 @@ impl RawMemory
                 
                 self.address_bus[0xFF46] = value;
 
+                let copy_address = (value as usize) << 8;
+                self.address_bus.copy_within(copy_address..copy_address + 160, 0xFE00);
+
             },
             _ => self.address_bus[address as usize] = value,
         }

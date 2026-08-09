@@ -185,21 +185,21 @@ fn main()
     let mut next_frame = std::time::Instant::now() + frame_duration;
 
     // --- Bucle principal ---
-    // En winit 0.29, run() toma un closure y retorna Result. No retorna hasta que la app cierra.
-    // En winit 0.29 el closure toma (event, event_loop_target): sin control_flow separado
+    // Winit funciona con un sistema de eventos que rigen lo que pasa en la ventana, 
+    // y se ejecuta en un bucle infinito hasta que se cierra la ventana
     event_loop.run(move |event, event_loop_target|
     {
         event_loop_target.set_control_flow(ControlFlow::WaitUntil(next_frame));
 
         match event
         {
-            // Cerrar ventana
+            // Evento de cuando se pide que se cierre la ventana
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } =>
             {
                 event_loop_target.exit();
             }
 
-            // Manejo de teclado
+            // Evento de cuando se presiona o suelta una tecla del teclado
             Event::WindowEvent 
             { 
                 event: WindowEvent::KeyboardInput 
@@ -226,6 +226,8 @@ fn main()
             }
 
             // Cuando ya no hay eventos pendientes: logica de frame
+            // es un bucle cada x tiempo, ideal para dibujar y actualizar la logica del emulador 
+            // frame por frame
             Event::AboutToWait =>
             {
                 let now = std::time::Instant::now();
