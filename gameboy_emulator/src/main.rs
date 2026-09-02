@@ -52,11 +52,11 @@ struct Emulator
 
 impl Emulator
 {
-    fn new(path: &str) -> Self
+    fn new(path: &str, rom_banks: usize, ram_banks: usize) -> Self
     {
         return Emulator
         {
-            cpu: cpu::Cpu::new(&path),
+            cpu: cpu::Cpu::new(&path,rom_banks, ram_banks),
             joypad: Joypad::new(),
             timer: timer::Timer::new(),
             ppu: ppu::Ppu::new()
@@ -130,32 +130,10 @@ fn main()
     let romdata = fs::read(path )
         .expect("No se pudo abrir el archivo");
 
-    let new_liceense_code_low: u8 = romdata[0x0144];
-    let new_liceense_code_high = romdata[0x0145]; 
-    let old_liceense_code = romdata[0x014b];
-    let cartridge_type = romdata[0x0147];
-    let rom_size = romdata[0x0148]; 
-    let ram_size = romdata[0x0149];
-    let destination_code = romdata[0x014A];
-    let mut chartitle: [char; 16] = [0 as char; 16];
+    let ram_banks = cartrige::fetch_ram_banks(&romdata);
+    let rom_banks = cartrige::fetch_rom_banks(&romdata);
 
-    for i in 0..15
-    {
-        chartitle[i] = romdata[0x0134 + i] as char;
-    }
-
-    let title: String = chartitle.iter().collect();
-
-    println!("title: {}", title);
-    println!("new liceense code: {}{}", new_liceense_code_low as char, new_liceense_code_high as char);
-    println!("old liceense code: {:X}", old_liceense_code);
-    println!("cartridge type: {:X}", cartridge_type);
-    println!("rom size: {:X}", rom_size);
-    println!("ram size: {:X}", ram_size);
-    println!("destination_code: {:X}", destination_code);
-
-    
-    let mut emulator = Emulator::new(path);
+    let mut emulator = Emulator::new(path,rom_banks, ram_banks);
 
     
     emulator.cpu.raw_memory.address_bus[0xFF00] |= 0b11001111;

@@ -2,6 +2,8 @@ use std::fs;
 
 use crate::cartrige;
 
+// Implementation for ONLY MBC1
+
 pub struct RawMemory 
 {
     pub address_bus: [u8; 0x10000],
@@ -19,7 +21,7 @@ impl RawMemory
             address_bus: [0; 0x10000],
             div_reset: false,
             ppu_mode: 2, //Averiguar como hacer una "interfaz" para MBCn
-            cartrige: cartrige::MBC1::new(ram_banks, rom_banks,path)
+            cartrige: cartrige::MBC1::new(path, ram_banks, rom_banks)
         }
     }
     

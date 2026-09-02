@@ -17,7 +17,7 @@ pub struct MBC1 {
 
 impl MBC1 {
 
-    pub fn new(ram_banks: usize, rom_banks: usize, path: &str) -> Self 
+    pub fn new( path: &str, ram_banks: usize, rom_banks: usize) -> Self 
     {
                 
         let mut rom_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(rom_banks);
@@ -84,22 +84,22 @@ impl MBC1 {
 }
 
 
-fn fetch_ram_size(romdata: &Vec<u8>) -> usize 
+pub fn fetch_ram_banks(romdata: &Vec<u8>) -> usize 
     {
 
     let ram_size_code = romdata[0x149];
 
-    match ram_size_code {
+    match ram_size_code { // bancos de 8k
             0x00 => return 0, // No RAM
-            0x02 => return 8 * 1024, // 8 KB RAM
-            0x03 => return 32 * 1024, // 32 KB RAM
-            0x04 => return 128 * 1024, // 128 KB RAM
-            0x05 => return 64 * 1024, // 64 KB RAM
+            0x02 => return 1, // 8 KB RAM, 1 banco
+            0x03 => return 4, // 32 KB RAM, 4 bancos
+            0x04 => return 16, // 128 KB RAM, 16 bancos
+            0x05 => return 8, // 64 KB RAM, 32 bancos
             _ => panic!("Unknown Cartridge RAM size code"),
     }
 }
 
-fn fetch_rom_banks(romdata: &[u8]) -> usize
+pub fn fetch_rom_banks(romdata: &Vec<u8>) -> usize
 {
 
     let rom_size_code = romdata[0x148];
@@ -127,7 +127,7 @@ fn fetch_mbc_type(romdata: &[u8]) -> MBC_Type
             0x00 => return MBC_Type::RomOnly, // No MBC
             0x01 | 0x02 | 0x03 => return MBC_Type::MBC1, // MBC1
             0x0F | 0x10 | 0x11 | 0x12 | 0x13 => return MBC_Type::MBC3, // MBC3
-            // Los demas no se si valen la pena
+            // Los demas no valen la pena
             _ => panic!("Unknown/Unimplemented Cartridge MBC type"),
     }
 }
