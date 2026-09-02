@@ -1,22 +1,25 @@
+use std::fs;
 
-
+use crate::cartrige;
 
 pub struct RawMemory 
 {
     pub address_bus: [u8; 0x10000],
     pub div_reset: bool,
-    pub ppu_mode: u8
+    pub ppu_mode: u8,
+    // pub cartrige: cartrige::Rom Averiguar como hacer que pueda ser CUalquier MBC
 }
 
 impl RawMemory
 {
-    pub fn new() -> Self
+    pub fn new(path: &str) -> Self
     {
         return RawMemory
         {
             address_bus: [0; 0x10000],
             div_reset: false,
-            ppu_mode: 2
+            ppu_mode: 2, //Averiguar como hacer una "interfaz" para MBC
+            // cartrige: cartrige::::new(path)
         }
     }
     
@@ -41,6 +44,53 @@ impl RawMemory
 
     pub fn write_byte(&mut self, address: u16, value: u8) 
     {
+
+
+
+        match self.cartrige.mbc_type 
+        {
+            cartrige::MBC_Type::RomOnly => 
+            {
+                if address >= 0x0000 && address <= 0x7FFF 
+                {
+                    return;
+                }
+            },
+            cartrige::MBC_Type::MBC1 =>
+            {
+                
+                if address >= 0x0000 && address <= 0x1FFF 
+                {
+
+                    self.cartrige.RAM_Enable(value);
+
+                }
+                if address >= 0x2000 && address <= 0x3FFF
+                {
+ 
+                    self.cartrige.Low_Bank_Number(value);
+                
+                }
+
+                if address >= 0x4000 && address <= 0x5FFF
+                {
+
+                    if self.cartrige.banking_mode
+                    {
+
+                        self.cartrige.RAM_Bank_Select(value);
+                    
+                    }
+                    else
+                    {
+
+                        self.cartrige.High_Bank_Number(value);
+
+                    }    
+                }
+            }
+            _=>{}
+        }
 
         if  (address >= 0xFE00 && address <= 0xFE9F) && (self.ppu_mode ==  2 || self.ppu_mode == 3)
         {

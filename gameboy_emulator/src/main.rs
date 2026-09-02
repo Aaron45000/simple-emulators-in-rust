@@ -9,6 +9,7 @@ mod memory;
 mod timer;
 mod cpu;
 mod ppu;
+mod cartrige;
 
 
 struct Joypad 
@@ -51,11 +52,11 @@ struct Emulator
 
 impl Emulator
 {
-    fn new() -> Self
+    fn new(path: &str) -> Self
     {
         return Emulator
         {
-            cpu: cpu::Cpu::new(),
+            cpu: cpu::Cpu::new(&path),
             joypad: Joypad::new(),
             timer: timer::Timer::new(),
             ppu: ppu::Ppu::new()
@@ -125,8 +126,8 @@ impl Emulator
 
 fn main() 
 {
-    // --- Leer ROM ---
-    let romdata = fs::read("/home/aaron4500/Descargas/Pokemon - Edicion Roja (Spain) (SGB Enhanced).gb")
+    let path: &str = "/home/aaron4500/Descargas/Pokemon - Edicion Roja (Spain) (SGB Enhanced).gb";
+    let romdata = fs::read(path )
         .expect("No se pudo abrir el archivo");
 
     let new_liceense_code_low: u8 = romdata[0x0144];
@@ -154,7 +155,7 @@ fn main()
     println!("destination_code: {:X}", destination_code);
 
     
-    let mut emulator = Emulator::new();
+    let mut emulator = Emulator::new(path);
 
     
     emulator.cpu.raw_memory.address_bus[0xFF00] |= 0b11001111;
@@ -264,7 +265,7 @@ fn main()
                             
                         }
 
-                        // emulator.ppu.step(ticks_gastados);
+                        emulator.ppu.step(ticks_gastados, &mut emulator.cpu.raw_memory);
                         emulator.timer.step(ticks_gastados as u8, &mut emulator.cpu.raw_memory);
                         // emulator.apu.step(ticks_gastados);
                         
@@ -289,8 +290,20 @@ fn main()
             // Renderizar con pixels cuando la ventana lo pida
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } =>
             {
-                // Aqui copiaras el framebuffer de la PPU a pixels
-                // Por ahora dejamos el fondo azul sin cambios
+                const PALETTE: [[u8; 4]; 4] = [
+                    [0xFF, 0xFF, 0xFF, 0xFF], // sombra 0: blanco
+                    [0xAA, 0xAA, 0xAA, 0xFF], // sombra 1: gris claro
+                    [0x55, 0x55, 0x55, 0xFF], // sombra 2: gris oscuro
+                    [0x00, 0x00, 0x00, 0xFF], // sombra 3: negro
+                ];
+
+                let framebuffer = emulator.ppu.framebuffer();
+
+                for (pixel, &shade) in pixels.frame_mut().chunks_exact_mut(4).zip(framebuffer.iter())
+                {
+                    pixel.copy_from_slice(&PALETTE[shade as usize]);
+                }
+
                 if pixels.render().is_err()
                 {
                     event_loop_target.exit();

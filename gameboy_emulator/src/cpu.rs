@@ -20,7 +20,7 @@ pub struct Cpu
 
 impl Cpu
 {
-    pub fn new() -> Self
+    pub fn new(path: &str) -> Self
     {
         return Cpu
         {
@@ -30,7 +30,7 @@ impl Cpu
             halted: false,
             halt_bug: false,
             work_registers: [0; 8],
-            raw_memory: memory::RawMemory::new(),
+            raw_memory: memory::RawMemory::new(path),
         };
     }
 
