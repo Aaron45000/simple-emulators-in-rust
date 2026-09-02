@@ -17,21 +17,30 @@ pub struct MBC1 {
 
 impl MBC1 {
 
-    pub fn new( path: &str, ram_banks: usize, rom_banks: usize) -> Self 
+    pub fn new(path: &str, ram_banks: usize, rom_banks: usize) -> Self 
     {
                 
         let mut rom_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(rom_banks);
 
-        let ram_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(ram_banks);
-        let mut raw_data = fs::read(path )
+        let accesible_banks = ram_banks & 0b11;
+        let ram_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(accesible_banks+1);
+        
+        for i in 0..(rom_banks-1)
+        {
+
+            rom_data.insert(i as usize, Vec::with_capacity(0x2000));
+
+        }
+        
+        let mut raw_data = fs::read(path)
         .expect("No se pudo abrir el archivo");
 
         // (Probar)
-        for i in 1..(rom_banks-1)
+        for i in 0..(rom_banks-1)
         {
 
             // split off returns a vector that is raw_data in [0x4000*i, len) and let raw_data be [0, 0x4000*i] 
-            let bank_i = raw_data.split_off(0x4000*i);
+            let bank_i = raw_data.split_off(0x4000*(i+1));
 
             rom_data.insert(i as usize, raw_data);
 

@@ -40,6 +40,8 @@ impl RawMemory
             
         }
 
+        // Implementar lectura de bancos correctos segun los datos en cartrige
+
         return self.address_bus[address as usize];
 
     }

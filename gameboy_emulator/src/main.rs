@@ -133,7 +133,7 @@ fn main()
     let ram_banks = cartrige::fetch_ram_banks(&romdata);
     let rom_banks = cartrige::fetch_rom_banks(&romdata);
 
-    let mut emulator = Emulator::new(path,rom_banks, ram_banks);
+    let mut emulator = Emulator::new(path,rom_banks,ram_banks);
 
     
     emulator.cpu.raw_memory.address_bus[0xFF00] |= 0b11001111;
