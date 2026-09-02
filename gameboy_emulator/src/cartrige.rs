@@ -20,17 +20,17 @@ impl MBC1 {
     pub fn new(ram_banks: usize, rom_banks: usize, path: &str) -> Self 
     {
                 
-        let mut rom_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(rom_banks-1);
+        let mut rom_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(rom_banks);
 
-        // implementar carga de datos de la rom a el HashMap (bucle for con la cantidad de bancos)
-        
+        let ram_data: HashMap<usize, Vec<u8>> = HashMap::with_capacity(ram_banks);
         let mut raw_data = fs::read(path )
         .expect("No se pudo abrir el archivo");
 
-        
+        // (Probar)
         for i in 1..(rom_banks-1)
         {
 
+            // split off returns a vector that is raw_data in [0x4000*i, len) and let raw_data be [0, 0x4000*i] 
             let bank_i = raw_data.split_off(0x4000*i);
 
             rom_data.insert(i as usize, raw_data);
@@ -75,6 +75,12 @@ impl MBC1 {
 
     }
     
+    pub fn RAM_Bank_Select (&mut self, value: u8)
+    {
+
+        self.current_ram |= (0x03 & value) << 5;
+
+    }
 }
 
 

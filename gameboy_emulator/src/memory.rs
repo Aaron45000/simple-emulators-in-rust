@@ -7,19 +7,19 @@ pub struct RawMemory
     pub address_bus: [u8; 0x10000],
     pub div_reset: bool,
     pub ppu_mode: u8,
-    // pub cartrige: cartrige::Rom Averiguar como hacer que pueda ser CUalquier MBC
+    pub cartrige: cartrige::MBC1 
 }
 
 impl RawMemory
 {
-    pub fn new(path: &str) -> Self
+    pub fn new(path: &str, rom_banks: usize, ram_banks: usize) -> Self
     {
         return RawMemory
         {
             address_bus: [0; 0x10000],
             div_reset: false,
-            ppu_mode: 2, //Averiguar como hacer una "interfaz" para MBC
-            // cartrige: cartrige::::new(path)
+            ppu_mode: 2, //Averiguar como hacer una "interfaz" para MBCn
+            cartrige: cartrige::MBC1::new(ram_banks, rom_banks,path)
         }
     }
     
@@ -44,20 +44,6 @@ impl RawMemory
 
     pub fn write_byte(&mut self, address: u16, value: u8) 
     {
-
-
-
-        match self.cartrige.mbc_type 
-        {
-            cartrige::MBC_Type::RomOnly => 
-            {
-                if address >= 0x0000 && address <= 0x7FFF 
-                {
-                    return;
-                }
-            },
-            cartrige::MBC_Type::MBC1 =>
-            {
                 
                 if address >= 0x0000 && address <= 0x1FFF 
                 {
@@ -88,10 +74,6 @@ impl RawMemory
 
                     }    
                 }
-            }
-            _=>{}
-        }
-
         if  (address >= 0xFE00 && address <= 0xFE9F) && (self.ppu_mode ==  2 || self.ppu_mode == 3)
         {
 
